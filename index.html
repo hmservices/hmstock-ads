@@ -231,6 +231,70 @@
     margin-top: 6px;
   }
 
+  .fetch-btn {
+    background: var(--orange);
+    color: var(--navy);
+    border: none;
+    padding: 0 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    border-radius: 2px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .fetch-btn:hover { background: #f08a4a; }
+  .fetch-btn:disabled { opacity: 0.5; cursor: wait; }
+
+  .fetch-status {
+    margin-top: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: #8893A8;
+    min-height: 14px;
+  }
+  .fetch-status.success { color: #5BCB8A; }
+  .fetch-status.error { color: #E07A3C; }
+
+  .product-preview {
+    margin-top: 10px;
+    padding: 10px;
+    background: var(--navy-2);
+    border: 1px solid #2A3854;
+    border-radius: 4px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .product-preview img {
+    width: 50px;
+    height: 50px;
+    object-fit: cover;
+    border-radius: 3px;
+    background: #fff;
+  }
+  .product-preview .pp-info {
+    flex: 1;
+    overflow: hidden;
+  }
+  .product-preview .pp-name {
+    font-family: 'Bricolage Grotesque', sans-serif;
+    font-size: 12px;
+    color: var(--bone);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .product-preview .pp-price {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--orange);
+    margin-top: 2px;
+  }
+
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip {
     background: var(--navy-2);
@@ -575,8 +639,12 @@
 
         <div class="field">
           <label>Product URL</label>
-          <input id="productUrl" type="text" placeholder="https://hmstock.store/products/..." />
-          <div class="field-hint">Paste any HMSTOCK product link</div>
+          <div style="display: flex; gap: 8px;">
+            <input id="productUrl" type="text" placeholder="https://hmstock.store/products/..." style="flex: 1;" />
+            <button id="fetchBtn" class="fetch-btn" type="button">⚡ Pull</button>
+          </div>
+          <div class="field-hint">Paste HMSTOCK link → click Pull to auto-fill</div>
+          <div id="fetchStatus" class="fetch-status"></div>
         </div>
 
         <div class="field">
@@ -789,6 +857,111 @@ const colorThemes = {
 };
 
 const generateBtn = document.getElementById('generateBtn');
+const fetchBtn = document.getElementById('fetchBtn');
+const fetchStatus = document.getElementById('fetchStatus');
+
+// Stores fetched product data
+let fetchedProduct = null;
+
+fetchBtn.addEventListener('click', async () => {
+  const url = document.getElementById('productUrl').value.trim();
+  if (!url) {
+    setFetchStatus('Paste a product URL first', 'error');
+    return;
+  }
+
+  // Extract product handle from any Shopify URL format
+  const match = url.match(/\/products\/([^/?#]+)/);
+  if (!match) {
+    setFetchStatus('Invalid Shopify URL format', 'error');
+    return;
+  }
+
+  const handle = match[1];
+  const baseMatch = url.match(/^(https?:\/\/[^/]+)/);
+  const baseUrl = baseMatch ? baseMatch[1] : 'https://hmstock.store';
+  const jsonUrl = baseUrl + '/products/' + handle + '.json';
+
+  fetchBtn.disabled = true;
+  fetchBtn.textContent = '...';
+  setFetchStatus('Fetching product data...', '');
+
+  try {
+    const res = await fetch(jsonUrl);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const p = data.product;
+
+    if (!p) throw new Error('No product data returned');
+
+    // Pull main image — Shopify gives us src URLs
+    const mainImage = p.image ? p.image.src : (p.images && p.images[0] ? p.images[0].src : null);
+
+    // Pull primary variant for price
+    const variant = p.variants && p.variants[0] ? p.variants[0] : null;
+    const price = variant ? variant.price : '';
+
+    // Strip HTML from description
+    const tmpDiv = document.createElement('div');
+    tmpDiv.innerHTML = p.body_html || '';
+    const cleanDesc = tmpDiv.textContent.replace(/\s+/g, ' ').trim().substring(0, 400);
+
+    fetchedProduct = {
+      title: p.title,
+      price: price,
+      description: cleanDesc,
+      vendor: p.vendor,
+      tags: p.tags,
+      type: p.product_type,
+      image: mainImage,
+      allImages: (p.images || []).map(img => img.src),
+      handle: handle,
+      url: url
+    };
+
+    // Auto-fill manual inputs
+    document.getElementById('productName').value = p.title || '';
+    document.getElementById('productPrice').value = price ? '$' + price : '';
+    document.getElementById('productDesc').value = cleanDesc;
+
+    // Show preview
+    showProductPreview(fetchedProduct);
+    setFetchStatus('✓ Pulled successfully — ready to generate', 'success');
+  } catch (err) {
+    console.error('Fetch error:', err);
+    setFetchStatus('Couldn\'t fetch — fill manually below', 'error');
+    fetchedProduct = null;
+  } finally {
+    fetchBtn.disabled = false;
+    fetchBtn.textContent = '⚡ Pull';
+  }
+});
+
+function setFetchStatus(msg, type) {
+  fetchStatus.textContent = msg;
+  fetchStatus.className = 'fetch-status' + (type ? ' ' + type : '');
+}
+
+function showProductPreview(product) {
+  // Remove any existing preview
+  const existing = document.querySelector('.product-preview');
+  if (existing) existing.remove();
+
+  if (!product.image) return;
+
+  const preview = document.createElement('div');
+  preview.className = 'product-preview';
+  preview.innerHTML =
+    '<img src="' + product.image + '" alt="" onerror="this.style.display=\'none\'" />' +
+    '<div class="pp-info">' +
+      '<div class="pp-name">' + escapeHtml(product.title) + '</div>' +
+      '<div class="pp-price">$' + escapeHtml(product.price) + '</div>' +
+    '</div>';
+
+  fetchStatus.parentNode.appendChild(preview);
+}
+
+
 const outputPanel = document.getElementById('outputPanel');
 
 generateBtn.addEventListener('click', async () => {
@@ -816,7 +989,7 @@ generateBtn.addEventListener('click', async () => {
 
   try {
     const ads = await generateAdsWithAI({ url, name, price, desc, adType, platform, tone, count, notes });
-    renderAds(ads, platform);
+    renderAds(ads, platform, fetchedProduct);
   } catch (err) {
     console.error(err);
     showError('Something went wrong: ' + err.message);
@@ -831,9 +1004,22 @@ function showError(msg) {
 }
 
 async function generateAdsWithAI(opts) {
-  const productInfo = opts.url
-    ? 'Product URL: ' + opts.url + '\nName/Price/Desc may need to be inferred from the URL slug.'
-    : 'Product: ' + opts.name + '\nPrice: ' + (opts.price || 'not specified') + '\nDescription: ' + (opts.desc || 'not provided');
+  // If we have fetched product data, use that as the source of truth
+  let productInfo;
+  if (fetchedProduct) {
+    productInfo = 'PRODUCT (auto-pulled from Shopify):\n' +
+      'Title: ' + fetchedProduct.title + '\n' +
+      'Price: $' + fetchedProduct.price + '\n' +
+      'Description: ' + fetchedProduct.description + '\n' +
+      (fetchedProduct.vendor ? 'Vendor: ' + fetchedProduct.vendor + '\n' : '') +
+      (fetchedProduct.type ? 'Type: ' + fetchedProduct.type + '\n' : '') +
+      (fetchedProduct.tags ? 'Tags: ' + fetchedProduct.tags + '\n' : '') +
+      'NOTE: Real product photo will be rendered in the ad — write copy that complements an actual product visual, not a description of one.';
+  } else {
+    productInfo = opts.url
+      ? 'Product URL: ' + opts.url + '\nName/Price/Desc may need to be inferred from the URL slug.'
+      : 'Product: ' + opts.name + '\nPrice: ' + (opts.price || 'not specified') + '\nDescription: ' + (opts.desc || 'not provided');
+  }
 
   const platformText = opts.platform === 'both' ? 'Facebook AND Instagram' : opts.platform === 'facebook' ? 'Facebook' : 'Instagram';
 
@@ -931,9 +1117,17 @@ Return only the JSON. No code fences. No explanation.`;
   return parsed.ads;
 }
 
-function renderAds(ads, requestedPlatform) {
+function renderAds(ads, requestedPlatform, fetchedProduct) {
   outputPanel.innerHTML = '<div class="results-header"><div class="results-title">' + ads.length + ' Ads Cooked</div><div class="results-count">// click any image to download</div></div><div id="adsContainer"></div>';
   const container = document.getElementById('adsContainer');
+
+  // Pre-load product image if we have one
+  let productImg = null;
+  if (fetchedProduct && fetchedProduct.image) {
+    productImg = new Image();
+    productImg.crossOrigin = 'anonymous';
+    productImg.src = fetchedProduct.image;
+  }
 
   ads.forEach((ad, i) => {
     const card = document.createElement('div');
@@ -979,54 +1173,299 @@ function renderAds(ads, requestedPlatform) {
       });
     });
 
-    setTimeout(() => renderAdCanvas(i, ad), 0);
+    setTimeout(() => renderAdCanvas(i, ad, productImg), 0);
   });
 }
 
-function renderAdCanvas(index, ad) {
+function renderAdCanvas(index, ad, productImg) {
   const canvas = document.getElementById('canvas-' + index);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const theme = colorThemes[ad.color_scheme] || colorThemes['navy-orange'];
 
+  // 6 distinct layout variants — each uses product image differently
+  const variant = index % 6;
+
+  // If we got a product image, wait for it to load then render
+  if (productImg && !productImg.complete) {
+    productImg.onload = () => drawAd(ctx, W, H, theme, variant, ad, productImg);
+    productImg.onerror = () => drawAd(ctx, W, H, theme, variant, ad, null);
+    if (productImg.complete) drawAd(ctx, W, H, theme, variant, ad, productImg);
+  } else {
+    drawAd(ctx, W, H, theme, variant, ad, productImg);
+  }
+}
+
+function drawAd(ctx, W, H, theme, variant, ad, img) {
+  // Background
   ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, W, H);
 
-  const variant = index % 4;
-  if (variant === 0) {
-    ctx.fillStyle = theme.accent;
-    ctx.beginPath();
-    ctx.moveTo(0, H * 0.65);
-    ctx.lineTo(W, H * 0.45);
-    ctx.lineTo(W, H);
-    ctx.lineTo(0, H);
-    ctx.closePath();
-    ctx.fill();
-  } else if (variant === 1) {
-    ctx.fillStyle = theme.accent;
-    ctx.beginPath();
-    ctx.arc(W * 0.85, H * 0.15, W * 0.35, 0, Math.PI * 2);
-    ctx.fill();
-  } else if (variant === 2) {
-    ctx.fillStyle = theme.accent;
-    ctx.fillRect(0, H * 0.7, W, H * 0.3);
+  const hasImg = img && img.complete && img.naturalWidth > 0;
+
+  // Layout dispatch — 6 distinct templates
+  if (variant === 0) layoutHeroSplit(ctx, W, H, theme, ad, img, hasImg);
+  else if (variant === 1) layoutBigProduct(ctx, W, H, theme, ad, img, hasImg);
+  else if (variant === 2) layoutSidePanel(ctx, W, H, theme, ad, img, hasImg);
+  else if (variant === 3) layoutEditorial(ctx, W, H, theme, ad, img, hasImg);
+  else if (variant === 4) layoutSaleTag(ctx, W, H, theme, ad, img, hasImg);
+  else layoutFullBleed(ctx, W, H, theme, ad, img, hasImg);
+
+  // Brand mark on every ad (top-left)
+  ctx.fillStyle = theme.text;
+  ctx.font = 'bold 22px "Bricolage Grotesque", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('HMSTOCK', 40, 40);
+}
+
+// LAYOUT 1: Hero split — product top half, copy bottom half
+function layoutHeroSplit(ctx, W, H, theme, ad, img, hasImg) {
+  if (hasImg) {
+    drawImageCover(ctx, img, 0, 0, W, H * 0.62);
   } else {
     ctx.fillStyle = theme.accent;
-    ctx.fillRect(0, 0, W * 0.08, H);
-    ctx.fillRect(W - W * 0.08, 0, W * 0.08, H);
+    ctx.fillRect(0, 0, W, H * 0.62);
   }
 
-  const headline = ad.headline_text || 'HMSTOCK';
+  // Bottom panel
+  ctx.fillStyle = theme.bg;
+  ctx.fillRect(0, H * 0.62, W, H * 0.38);
+
+  // Headline
+  drawHeadline(ctx, ad.headline_text || 'HMSTOCK', W / 2, H * 0.74, W * 0.9, theme.text, 80);
+
+  if (ad.subtext) {
+    ctx.fillStyle = theme.text;
+    ctx.font = '24px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(ad.subtext.toUpperCase(), W / 2, H * 0.84);
+  }
+
+  if (ad.cta_text) drawCTA(ctx, ad.cta_text, W / 2, H * 0.91, theme);
+}
+
+// LAYOUT 2: Big product centered with text overlay
+function layoutBigProduct(ctx, W, H, theme, ad, img, hasImg) {
+  // Accent bar top
+  ctx.fillStyle = theme.accent;
+  ctx.fillRect(0, 0, W, 14);
+
+  if (hasImg) {
+    // Product image takes center, large
+    const padding = 80;
+    drawImageContain(ctx, img, padding, 100, W - padding * 2, H * 0.55);
+  } else {
+    ctx.fillStyle = theme.accent;
+    ctx.beginPath();
+    ctx.arc(W / 2, H * 0.4, W * 0.25, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Big headline below product
+  drawHeadline(ctx, ad.headline_text || 'NEW DROP', W / 2, H * 0.78, W * 0.85, theme.text, 90);
+
+  if (ad.cta_text) drawCTA(ctx, ad.cta_text, W / 2, H * 0.91, theme);
+}
+
+// LAYOUT 3: Side panel — image left half, text right half
+function layoutSidePanel(ctx, W, H, theme, ad, img, hasImg) {
+  if (hasImg) {
+    drawImageCover(ctx, img, 0, 0, W * 0.55, H);
+  } else {
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(0, 0, W * 0.55, H);
+  }
+
+  // Right panel
+  ctx.fillStyle = theme.bg;
+  ctx.fillRect(W * 0.55, 0, W * 0.45, H);
+
+  // Headline on right
+  ctx.textAlign = 'left';
+  drawHeadlineLeft(ctx, ad.headline_text || 'HMSTOCK', W * 0.6, H * 0.4, W * 0.38, theme.text, 60);
+
+  if (ad.subtext) {
+    ctx.fillStyle = theme.text;
+    ctx.font = '20px "JetBrains Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(ad.subtext.toUpperCase(), W * 0.6, H * 0.62);
+  }
+
+  // CTA on right
+  if (ad.cta_text) {
+    const ctaText = ad.cta_text.toUpperCase();
+    ctx.font = 'bold 26px "Inter", sans-serif';
+    const ctaW = ctx.measureText(ctaText).width + 60;
+    const ctaH = 60;
+    const ctaX = W * 0.6;
+    const ctaY = H * 0.72;
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(ctaX, ctaY, ctaW, ctaH);
+    ctx.fillStyle = theme.bg;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(ctaText, ctaX + ctaW / 2, ctaY + ctaH / 2);
+  }
+}
+
+// LAYOUT 4: Editorial — minimal, magazine style
+function layoutEditorial(ctx, W, H, theme, ad, img, hasImg) {
+  if (hasImg) {
+    drawImageContain(ctx, img, W * 0.15, H * 0.15, W * 0.7, H * 0.5);
+  } else {
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(W * 0.15, H * 0.15, W * 0.7, H * 0.5);
+  }
+
+  // Thin line above headline
+  ctx.fillStyle = theme.accent;
+  ctx.fillRect(W / 2 - 30, H * 0.72, 60, 2);
+
+  // Editorial label
   ctx.fillStyle = theme.text;
-  ctx.font = 'bold 110px "Bricolage Grotesque", sans-serif';
+  ctx.font = '14px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('// HMSTOCK COLLECTION', W / 2, H * 0.7);
+
+  // Headline
+  drawHeadline(ctx, ad.headline_text || 'NEW IN', W / 2, H * 0.82, W * 0.85, theme.text, 70);
+
+  if (ad.cta_text) {
+    ctx.fillStyle = theme.text;
+    ctx.font = 'bold 18px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(ad.cta_text.toUpperCase() + '  →', W / 2, H * 0.93);
+  }
+}
+
+// LAYOUT 5: Sale tag — bold price callout corner
+function layoutSaleTag(ctx, W, H, theme, ad, img, hasImg) {
+  if (hasImg) {
+    drawImageCover(ctx, img, 0, 0, W, H);
+    // Dark overlay for text legibility
+    ctx.fillStyle = 'rgba(15, 26, 44, 0.4)';
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Big sale tag in corner — orange diagonal
+  ctx.save();
+  ctx.translate(W * 0.85, H * 0.18);
+  ctx.rotate(0.2);
+  ctx.fillStyle = '#E07A3C';
+  ctx.fillRect(-110, -50, 220, 100);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 38px "Bricolage Grotesque", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('SALE', 0, -10);
+  ctx.font = 'bold 18px "JetBrains Mono", monospace';
+  ctx.fillText('// LIMITED', 0, 22);
+  ctx.restore();
+
+  // Headline at bottom
+  drawHeadline(ctx, ad.headline_text || 'DON\'T MISS', W / 2, H * 0.78, W * 0.9, '#FFFFFF', 80);
+
+  if (ad.subtext) {
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = '24px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(ad.subtext.toUpperCase(), W / 2, H * 0.87);
+  }
+
+  if (ad.cta_text) drawCTAOnImage(ctx, ad.cta_text, W / 2, H * 0.94);
+}
+
+// LAYOUT 6: Full bleed — image fills, text overlay top
+function layoutFullBleed(ctx, W, H, theme, ad, img, hasImg) {
+  if (hasImg) {
+    drawImageCover(ctx, img, 0, 0, W, H);
+    // Gradient at bottom for text legibility
+    const grad = ctx.createLinearGradient(0, H * 0.5, 0, H);
+    grad.addColorStop(0, 'rgba(15, 26, 44, 0)');
+    grad.addColorStop(1, 'rgba(15, 26, 44, 0.85)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, H * 0.5, W, H * 0.5);
+  } else {
+    ctx.fillStyle = theme.accent;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Headline at bottom over gradient
+  drawHeadline(ctx, ad.headline_text || 'HMSTOCK', W / 2, H * 0.78, W * 0.9, '#FFFFFF', 90);
+
+  if (ad.subtext) {
+    ctx.fillStyle = '#FFFFFF';
+    ctx.globalAlpha = 0.9;
+    ctx.font = '22px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(ad.subtext.toUpperCase(), W / 2, H * 0.88);
+    ctx.globalAlpha = 1;
+  }
+
+  if (ad.cta_text) drawCTAOnImage(ctx, ad.cta_text, W / 2, H * 0.95);
+}
+
+// Helper: draw image with cover behavior (fill, crop)
+function drawImageCover(ctx, img, x, y, w, h) {
+  const imgRatio = img.naturalWidth / img.naturalHeight;
+  const boxRatio = w / h;
+  let sx, sy, sw, sh;
+
+  if (imgRatio > boxRatio) {
+    // Image is wider — crop sides
+    sh = img.naturalHeight;
+    sw = sh * boxRatio;
+    sx = (img.naturalWidth - sw) / 2;
+    sy = 0;
+  } else {
+    // Image is taller — crop top/bottom
+    sw = img.naturalWidth;
+    sh = sw / boxRatio;
+    sx = 0;
+    sy = (img.naturalHeight - sh) / 2;
+  }
+
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+
+// Helper: draw image with contain behavior (fit, no crop)
+function drawImageContain(ctx, img, x, y, w, h) {
+  const imgRatio = img.naturalWidth / img.naturalHeight;
+  const boxRatio = w / h;
+  let dw, dh, dx, dy;
+
+  if (imgRatio > boxRatio) {
+    dw = w;
+    dh = w / imgRatio;
+    dx = x;
+    dy = y + (h - dh) / 2;
+  } else {
+    dh = h;
+    dw = h * imgRatio;
+    dx = x + (w - dw) / 2;
+    dy = y;
+  }
+
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
+// Helper: draw a centered headline with auto-wrap and auto-size
+function drawHeadline(ctx, text, cx, cy, maxWidth, color, baseSize) {
+  ctx.fillStyle = color;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  const words = headline.split(' ');
+  let fontSize = baseSize;
+  ctx.font = 'bold ' + fontSize + 'px "Bricolage Grotesque", sans-serif';
+
+  const words = text.split(' ');
   const lines = [];
   let currentLine = '';
-  const maxWidth = W * 0.85;
   for (let i = 0; i < words.length; i++) {
     const test = currentLine + (currentLine ? ' ' : '') + words[i];
     if (ctx.measureText(test).width > maxWidth && currentLine) {
@@ -1038,51 +1477,84 @@ function renderAdCanvas(index, ad) {
   }
   if (currentLine) lines.push(currentLine);
 
-  let fontSize = 110;
-  if (lines.length > 3) fontSize = 80;
-  if (lines.length > 4) fontSize = 65;
+  if (lines.length > 2) fontSize = baseSize * 0.75;
+  if (lines.length > 3) fontSize = baseSize * 0.6;
   ctx.font = 'bold ' + fontSize + 'px "Bricolage Grotesque", sans-serif';
 
   const lineHeight = fontSize * 1.05;
   const totalH = lines.length * lineHeight;
-  const startY = H / 2 - totalH / 2 + lineHeight / 2 - (ad.subtext ? 30 : 0);
+  const startY = cy - totalH / 2 + lineHeight / 2;
 
   lines.forEach((line, i) => {
-    ctx.fillText(line.toUpperCase(), W / 2, startY + i * lineHeight);
+    ctx.fillText(line.toUpperCase(), cx, startY + i * lineHeight);
   });
+}
 
-  if (ad.subtext) {
-    ctx.fillStyle = theme.text;
-    ctx.font = '32px "JetBrains Mono", monospace';
-    ctx.fillText(ad.subtext.toUpperCase(), W / 2, startY + lines.length * lineHeight + 60);
-  }
-
-  if (ad.cta_text) {
-    const ctaText = ad.cta_text.toUpperCase();
-    ctx.font = 'bold 28px "Inter", sans-serif';
-    const ctaW = ctx.measureText(ctaText).width + 80;
-    const ctaH = 70;
-    const ctaX = W / 2 - ctaW / 2;
-    const ctaY = H * 0.82;
-    ctx.fillStyle = theme.text;
-    ctx.fillRect(ctaX, ctaY, ctaW, ctaH);
-    ctx.fillStyle = theme.bg;
-    ctx.fillText(ctaText, W / 2, ctaY + ctaH / 2);
-  }
-
-  ctx.fillStyle = theme.text;
-  ctx.font = 'bold 22px "Bricolage Grotesque", sans-serif';
+// Helper: left-aligned headline (for side panel layout)
+function drawHeadlineLeft(ctx, text, x, cy, maxWidth, color, baseSize) {
+  ctx.fillStyle = color;
   ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText('HMSTOCK', 40, 40);
+  ctx.textBaseline = 'middle';
 
-  ctx.fillStyle = theme.text;
-  ctx.globalAlpha = 0.7;
-  ctx.font = '18px "JetBrains Mono", monospace';
+  let fontSize = baseSize;
+  ctx.font = 'bold ' + fontSize + 'px "Bricolage Grotesque", sans-serif';
+
+  const words = text.split(' ');
+  const lines = [];
+  let currentLine = '';
+  for (let i = 0; i < words.length; i++) {
+    const test = currentLine + (currentLine ? ' ' : '') + words[i];
+    if (ctx.measureText(test).width > maxWidth && currentLine) {
+      lines.push(currentLine);
+      currentLine = words[i];
+    } else {
+      currentLine = test;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+
+  if (lines.length > 3) fontSize = baseSize * 0.75;
+  ctx.font = 'bold ' + fontSize + 'px "Bricolage Grotesque", sans-serif';
+
+  const lineHeight = fontSize * 1.05;
+  const totalH = lines.length * lineHeight;
+  const startY = cy - totalH / 2 + lineHeight / 2;
+
+  lines.forEach((line, i) => {
+    ctx.fillText(line.toUpperCase(), x, startY + i * lineHeight);
+  });
+}
+
+// Helper: solid CTA button on bg
+function drawCTA(ctx, text, cx, cy, theme) {
+  const ctaText = text.toUpperCase();
+  ctx.font = 'bold 28px "Inter", sans-serif';
+  const ctaW = ctx.measureText(ctaText).width + 80;
+  const ctaH = 70;
+  const ctaX = cx - ctaW / 2;
+  const ctaY = cy - ctaH / 2;
+  ctx.fillStyle = theme.accent;
+  ctx.fillRect(ctaX, ctaY, ctaW, ctaH);
+  ctx.fillStyle = theme.bg;
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'bottom';
-  ctx.fillText('// wherever the day takes you', W / 2, H - 40);
-  ctx.globalAlpha = 1;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(ctaText, cx, cy);
+}
+
+// Helper: white CTA button for image overlays
+function drawCTAOnImage(ctx, text, cx, cy) {
+  const ctaText = text.toUpperCase();
+  ctx.font = 'bold 26px "Inter", sans-serif';
+  const ctaW = ctx.measureText(ctaText).width + 60;
+  const ctaH = 60;
+  const ctaX = cx - ctaW / 2;
+  const ctaY = cy - ctaH / 2;
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(ctaX, ctaY, ctaW, ctaH);
+  ctx.fillStyle = '#0F1A2C';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(ctaText, cx, cy);
 }
 
 function escapeHtml(s) {
